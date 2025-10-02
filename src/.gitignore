@@ -1,0 +1,12 @@
+# Virtual environment
+.venv/
+
+# Service account keys 
+keys/
+*gcp-sa.json
+
+.venv/
+__pycache__/
+
+
+keys
