@@ -1,33 +1,30 @@
-# Generic metadata about this project
 name: Earthquake_Batch_Automation_Project
 prefect-version: 3.4.19
 
 build: null
 push: null
 
-# Tell Prefect how to fetch your code and get the env ready
 pull:
   - prefect.deployments.steps.git_clone:
+      id: clone
       repository: "https://github.com/LukeCWarren/EarthQuake-Batch-Automation-Project.git"
       branch: "main"
-  - prefect.deployments.steps.run_shell_script:
-      id: install_requirements
-      script: pip install -r requirements.txt
-  - prefect.deployments.steps.set_working_directory:
-      directory: "src"
 
-# Deployment config
+  - prefect.deployments.steps.run_shell_script:
+      # RUN PIP INSIDE THE CLONED REPO (so requirements.txt is found)
+      directory: "{{ clone.directory }}"
+      script: |
+        python -m pip install -r requirements.txt
+
+  - prefect.deployments.steps.set_working_directory:
+      # NOW run from the src folder
+      directory: "{{ clone.directory }}/src"
+
 deployments:
   - name: daily-usgs
-    description: null
-    entrypoint: src/Extract_Merge.py:earthquake_pipeline
-    parameters: {}
-    tags: []
-    concurrency_limit: null
+    entrypoint: Extract_Merge.py:earthquake_pipeline
     work_pool:
       name: earthquakes-pool
-      work_queue_name: null
-      job_variables: {}
     schedules:
       - cron: "0 12 * * *"
-        timezone: null
+        timezone: America/Los_Angeles
