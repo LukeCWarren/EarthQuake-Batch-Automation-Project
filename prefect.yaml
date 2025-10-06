@@ -22,7 +22,7 @@ pull:
 
 deployments:
   - name: daily-usgs
-    entrypoint: Extract_Merge.py:earthquake_pipeline
+    entrypoint: Extract.py:earthquake_pipeline
     work_pool:
       name: earthquakes-pool
     schedules:
