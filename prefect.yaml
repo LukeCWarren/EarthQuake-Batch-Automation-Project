@@ -2,37 +2,32 @@
 name: Earthquake_Batch_Automation_Project
 prefect-version: 3.4.19
 
-# build section allows you to manage and build docker images
 build: null
-
-# push section allows you to manage if and how this project is uploaded to remote locations
 push: null
 
-# pull section allows you to provide instructions for cloning this project in remote locations
+# Tell Prefect how to fetch your code and get the env ready
 pull:
   - prefect.deployments.steps.git_clone:
       repository: "https://github.com/LukeCWarren/EarthQuake-Batch-Automation-Project.git"
       branch: "main"
-  - prefect.deployments.steps.pip_install:
-      requirements: "requirements.txt"
+  - prefect.deployments.steps.run_shell_script:
+      id: install_requirements
       script: pip install -r requirements.txt
   - prefect.deployments.steps.set_working_directory:
       directory: "src"
 
-# the deployments section allows you to provide configuration for deploying flows
+# Deployment config
 deployments:
-- name: daily-usgs
-  version: null
-  tags: []
-  concurrency_limit: null
-  description: null
-  entrypoint: src/Extract_Merge.py:earthquake_pipeline
-  parameters: {}
-  work_pool:
-    name: earthquakes-pool
-    work_queue_name: null
-    job_variables: {}
-  schedules:
-  - cron: "0 12 * * *"
-    timezone: null
-    day_or: true
+  - name: daily-usgs
+    description: null
+    entrypoint: src/Extract_Merge.py:earthquake_pipeline
+    parameters: {}
+    tags: []
+    concurrency_limit: null
+    work_pool:
+      name: earthquakes-pool
+      work_queue_name: null
+      job_variables: {}
+    schedules:
+      - cron: "0 12 * * *"
+        timezone: null
