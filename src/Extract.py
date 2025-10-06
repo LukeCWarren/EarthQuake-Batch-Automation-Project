@@ -1,13 +1,20 @@
 # Extract_Merge.py
 import requests
+import json
 import pandas as pd
 from datetime import datetime, timedelta, timezone
+
 from prefect import flow, get_run_logger
 import pyarrow as pa
 import pyarrow.parquet as pq
 from io import BytesIO
 from google.cloud import storage, bigquery
 import os
+
+#prefect block class managing secret
+from prefect_gcp.secret_manager import GcpSecret
+
+gcpsecret_block = GcpSecret.load("gcp-sa-json")
 
 
 ### helper: create GCP clients
@@ -44,6 +51,12 @@ def load_parquet_to_curated_partition(gcs_uri: str, date_str: str, bq_client: bi
 @flow(name="earthquake-pipeline")
 def earthquake_pipeline(days_back: int = 1):
     logger = get_run_logger()
+
+        # ---- GCP AUTH via Prefect block (your block name: gcp-sa-json) ----
+    # This reads your SA JSON from GCP Secret Manager (through the Prefect block)
+    gcpsecret_block = GcpSecret.load("gcp-sa-json")  # block you already created
+    sa_bytes = gcpsecret_block.read_secret()         # bytes
+    creds_dict = json.loads(sa_bytes.decode("utf-8"))
 
     ### Look-back window
     end = datetime.now(timezone.utc)
