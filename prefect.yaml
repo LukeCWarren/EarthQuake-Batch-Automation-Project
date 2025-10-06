@@ -5,26 +5,28 @@ build: null
 push: null
 
 pull:
+  # Step 1: Clone your repo into Prefect’s execution environment
   - prefect.deployments.steps.git_clone:
       id: clone
       repository: "https://github.com/LukeCWarren/EarthQuake-Batch-Automation-Project.git"
       branch: "main"
 
+  # Step 2: Install dependencies from inside the cloned repo
   - prefect.deployments.steps.run_shell_script:
-      # RUN PIP INSIDE THE CLONED REPO (so requirements.txt is found)
+      # This tells Prefect to run the script INSIDE your repo
       directory: "{{ clone.directory }}"
       script: |
         python -m pip install -r requirements.txt
 
+  # Step 3: Run your code from inside the cloned repo
   - prefect.deployments.steps.set_working_directory:
-      # NOW run from the src folder
-      directory: "{{ clone.directory }}/src"
+      directory: "{{ clone.directory }}"
 
 deployments:
   - name: daily-usgs
     entrypoint: src/Extract.py:earthquake_pipeline
     work_pool:
-      name: earthquakes-pool
+      name: earthquakes-pool  # or your new local pool
     schedules:
       - cron: "0 12 * * *"
         timezone: America/Los_Angeles
