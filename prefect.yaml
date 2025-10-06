@@ -26,7 +26,7 @@ deployments:
   - name: daily-usgs
     entrypoint: src/Extract.py:earthquake_pipeline
     work_pool:
-      name: earthquakes-pool  # or your new local pool
+      name: earthquakes-local  # or your new local pool
     schedules:
       - cron: "0 12 * * *"
         timezone: America/Los_Angeles
