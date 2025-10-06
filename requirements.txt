@@ -1,0 +1,9 @@
+prefect==3.4.19
+requests
+pandas
+pyarrow
+google-cloud-storage
+google-cloud-bigquery
+google-auth
+google-auth-oauthlib
+google-auth-httplib2
