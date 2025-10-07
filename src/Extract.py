@@ -1,6 +1,5 @@
-# Extract_Merge.py
+# Extract_Merge.py  (or src/Extract.py)
 import requests
-import json
 import pandas as pd
 from datetime import datetime, timedelta, timezone
 
@@ -11,29 +10,38 @@ from io import BytesIO
 from google.cloud import storage, bigquery
 import os
 
-#prefect block class managing secret
-from prefect_gcp.secret_manager import GcpSecret
+# --- AUTH BLOCKS -----------------------------------------------------------
 
-gcpsecret_block = GcpSecret.load("gcp-sa-json")
+### REMOVED: GcpSecret import (Secret Manager path won't work on push)
+# from prefect_gcp import GcpSecret
+
+### REMOVED: contextmanager/tempfile helper for Secret Manager
+# from contextlib import contextmanager
+# import tempfile
+
+### ADDED: use Prefect's GcpCredentials block (stores SA JSON in Prefect)
+from prefect_gcp import GcpCredentials  # ADDED
 
 
-### helper: create GCP clients
-def make_gcp_clients():
+# --- HELPERS ---------------------------------------------------------------
+
+### CHANGED: allow passing credentials & project_id into clients
+def make_gcp_clients(credentials=None, project_id=None):
     """
-    Create and return (gcs_client, bq_client).
-    If GOOGLE_APPLICATION_CREDENTIALS is set, uses that for auth.
+    Return (gcs_client, bq_client).
+    If credentials/project_id are provided (from GcpCredentials), use them.
+    Otherwise fall back to ADC.
     """
-    gcs = storage.Client()
-    bq = bigquery.Client()
+    if credentials is None:
+        gcs = storage.Client(project=project_id)
+        bq = bigquery.Client(project=project_id)
+    else:
+        gcs = storage.Client(credentials=credentials, project=project_id)
+        bq = bigquery.Client(credentials=credentials, project=project_id)
     return gcs, bq
 
 
-### helper: load parquet into a single BigQuery partition (overwrites that day) 
 def load_parquet_to_curated_partition(gcs_uri: str, date_str: str, bq_client: bigquery.Client):
-    """
-    Load parquet from GCS into practical-data-engineering.earthquakes.quakes_curated
-    for the given date. Uses partition decorator + WRITE_TRUNCATE (idempotent per day).
-    """
     partition = date_str.replace("-", "")  # e.g. 2025-09-29 -> 20250929
     dest = f"practical-data-engineering.earthquakes.quakes_curated${partition}"
     job = bq_client.load_table_from_uri(
@@ -48,33 +56,33 @@ def load_parquet_to_curated_partition(gcs_uri: str, date_str: str, bq_client: bi
     return dest
 
 
+# --- FLOW ------------------------------------------------------------------
+
 @flow(name="earthquake-pipeline")
 def earthquake_pipeline(days_back: int = 1):
     logger = get_run_logger()
 
-        # ---- GCP AUTH via Prefect block (your block name: gcp-sa-json) ----
-    # This reads your SA JSON from GCP Secret Manager (through the Prefect block)
-    gcpsecret_block = GcpSecret.load("gcp-sa-json")  # block you already created
-    sa_bytes = gcpsecret_block.read_secret()         # bytes
-    creds_dict = json.loads(sa_bytes.decode("utf-8"))
+    # === AUTH RESOLUTION (works on push) ===================================
+    # Set this to your block name (or set env var PREFECT_GCP_CREDENTIALS_BLOCK in the deployment)
+    block_name = os.getenv("PREFECT_GCP_CREDENTIALS_BLOCK", "gcp-sa-creds")  # CHANGED
+    gcp_block = GcpCredentials.load(block_name)                               # ADDED
+    creds = gcp_block.get_credentials_from_service_account()                  # ADDED
+    project_id = getattr(gcp_block, "project", None) or getattr(creds, "project_id", None)  # ADDED
+    logger.info(f"Auth mode: GcpCredentials block '{block_name}'")            # ADDED
 
-    ### Look-back window
+    # Look-back window
     end = datetime.now(timezone.utc)
     start = end - timedelta(days=days_back)
 
-    ### API request
+    # API request
     url = "https://earthquake.usgs.gov/fdsnws/event/1/query"
-    params = {
-        "format": "geojson",
-        "starttime": start.isoformat(),
-        "endtime": end.isoformat(),
-    }
+    params = {"format": "geojson", "starttime": start.isoformat(), "endtime": end.isoformat()}
     resp = requests.get(url, params=params, timeout=30)
     logger.info(f"Request URL: {resp.url}")
     resp.raise_for_status()
     data = resp.json()
 
-    ### Normalize
+    # Normalize
     features = data.get("features", [])
     if not features:
         logger.info("No earthquakes found for the requested window.")
@@ -101,12 +109,12 @@ def earthquake_pipeline(days_back: int = 1):
         )
         df.drop(columns=["geometry_coordinates"], inplace=True)
 
-    ### epoch ms -> UTC timestamps
+    # epoch ms -> UTC timestamps
     for c in ["properties_time", "properties_updated"]:
         if c in df.columns:
             df[c] = pd.to_datetime(df[c], unit="ms", utc=True)
 
-    ### de-dupe within batch by event id
+    # de-dupe within batch by event id
     if "id" in df.columns:
         df = df.drop_duplicates(subset=["id"], keep="last")
 
@@ -115,13 +123,15 @@ def earthquake_pipeline(days_back: int = 1):
         logger.info("DataFrame is empty")
         return 0
 
-    ### determine which calendar dates are present (UTC)
+    # determine which calendar dates are present (UTC)
     df["event_date"] = df["properties_time"].dt.date
     unique_dates = sorted(df["event_date"].unique())
     logger.info(f"Calendar dates in batch: {unique_dates}")
 
     bucket_name = "luke_project"
-    gcs, bq = make_gcp_clients()
+
+    ### CHANGED: build clients with the resolved credentials (works on push)
+    gcs, bq = make_gcp_clients(credentials=creds, project_id=project_id)  # CHANGED
 
     total_loaded = 0
     for d in unique_dates:
@@ -129,7 +139,7 @@ def earthquake_pipeline(days_back: int = 1):
         part_df = df[df["event_date"] == d].drop(columns=["event_date"]).copy()
         date_str = d.isoformat()
 
-        ### Parquet uses TIMESTAMP_MILLIS (avoid TIMESTAMP_NANOS)
+        # Parquet uses TIMESTAMP_MILLIS (avoid TIMESTAMP_NANOS)
         fields = []
         for name in part_df.columns:
             if name in ("properties_time", "properties_updated"):
@@ -146,19 +156,19 @@ def earthquake_pipeline(days_back: int = 1):
         buf = BytesIO()
         pq.write_table(table, buf)
 
-        ### daily path per event date
+        # daily path per event date
         path = f"earthquakes/ingest_date={date_str}/quakes_{date_str}.parquet"
         gcs.bucket(bucket_name).blob(path).upload_from_string(buf.getvalue())
         gcs_uri = f"gs://{bucket_name}/{path}"
         logger.info(f"Uploaded to {gcs_uri}")
 
-        ### load this date into its own partition (idempotent per day)
+        # load this date into its own partition (idempotent per day)
         dest = load_parquet_to_curated_partition(gcs_uri, date_str, bq)
         logger.info(f"Loaded GCS parquet into BigQuery partition: {dest}")
 
         total_loaded += len(part_df)
 
-    ### sanity prints from the full DF
+    # sanity prints from the full DF
     print(df.head())
     print(len(df))
     print("Dates loaded:", unique_dates)
